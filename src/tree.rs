@@ -30,22 +30,22 @@ pub enum TreeError {
 }
 
 enum FsEntryType {
-    Directory(usize),
-    File(usize)
+    Directory,
+    File
 }
 
 impl FsEntryType {
     pub fn is_dir(&self) -> bool {
         match self {
-            Self::Directory(_) => true,
-            Self::File(_) => false
+            Self::Directory => true,
+            Self::File => false
         }
     }
 
     pub fn is_file(&self) -> bool {
         match self {
-            Self::Directory(_) => false,
-            Self::File(_) => true
+            Self::Directory => false,
+            Self::File => true
         }
     }
 }
@@ -56,9 +56,6 @@ trait TreeNode {
     type ErrorType;
 
     fn get_key(&self) -> Self::TreeKey;
-
-    fn on_child_added(&mut self, child: &Self) -> Result<(), Self::ErrorType>;
-    fn on_child_removed(&mut self, child: Self) -> Result<(), Self::ErrorType>;
 }
 
 struct Node<T: TreeNode> {
@@ -77,6 +74,14 @@ impl<T: TreeNode> Node<T> where <T as TreeNode>::TreeKey: Hash + Eq + Clone{
         }
     }
 
+    pub fn children(&self) -> std::collections::hash_map::Iter<T::TreeKey, Node<T>> {
+        self.children.iter()
+    }
+
+    pub fn children_mut(&mut self) -> std::collections::hash_map::IterMut<T::TreeKey, Node<T>> {
+        self.children.iter_mut()
+    }
+
     pub fn get_child<A: Borrow<T::TreeKey>>(&self, key: A) -> Option<&Self> {
         self.children.get(key.borrow())
     }
@@ -90,11 +95,9 @@ impl<T: TreeNode> Node<T> where <T as TreeNode>::TreeKey: Hash + Eq + Clone{
         if !self.children.contains_key(&key) | overwrite {
             if let Some(original) = self.children.insert(key.clone(), Self::new(data)) {
                 let Self { key: _, data: data, children: _ } = original;
-                self.data.on_child_removed(data);
             }
             let data = self.children.get(&key).expect("Failed to find child immediately after adding it!");
             let data = &data.data;
-            self.data.on_child_added(data);
         }
         self.children.get_mut(&key).expect("Failed to find child after guaranteeing existence!")
     }
@@ -105,14 +108,12 @@ impl<T: TreeNode> Node<T> where <T as TreeNode>::TreeKey: Hash + Eq + Clone{
         if self.children.contains_key(&key) {
             if overwrite {
                 let Self { key: _, data: data, children: _ } = self.children.insert(key, Self::new(data)).expect("No original member found despite promise!");
-                self.data.on_child_removed(data);
             }
             Ok(overwrite)
         } else {
             self.children.insert(key.clone(), Self::new(data));
             let data = self.children.get(&key).expect("Failed to find child immediately after adding it!");
             let data = &data.data;
-            self.data.on_child_added(data);
             Ok(true)
         }
     }
@@ -129,6 +130,7 @@ pub struct FsNode {
     local_path: PathBuf,
     root_path: PathBuf,
     entry_type: FsEntryType,
+    maps_physically: bool,
 }
 
 impl TreeNode for FsNode {
@@ -138,35 +140,19 @@ impl TreeNode for FsNode {
     fn get_key(&self) -> Self::TreeKey {
         self.name.clone()
     }
-
-    fn on_child_added(&mut self, _child: &Self) -> Result<(), Self::ErrorType> {
-        if let FsEntryType::Directory(count) = &mut self.entry_type {
-            *count += 1;
-            Ok(())
-        } else {
-            Err(TreeError::FileChild(self.local_path.clone()))
-        }
-    }
-
-    fn on_child_removed(&mut self, _child: Self) -> Result<(), Self::ErrorType> {
-        if let FsEntryType::Directory(count) = &mut self.entry_type {
-            *count -= 1;
-        }
-        Ok(())
-    }
 }
 
 impl FsNode {
-    fn validate_get_fs_entry(path: &Path) -> Result<FsEntryType, TreeError> {
-        if !path.exists() {
+    fn validate_get_fs_entry(path: &Path, should_be_physical: bool) -> Result<FsEntryType, TreeError> {
+        if !path.exists() && should_be_physical {
             Err(TreeError::PathDoesNotExist(path.to_path_buf()))
         } else {
             match std::fs::metadata(&path) {
                 Ok(metadata) => {
                     if metadata.is_file() {
-                        Ok(FsEntryType::File(metadata.len() as usize))
+                        Ok(FsEntryType::File)
                     } else if metadata.is_dir() {
-                        Ok(FsEntryType::Directory(0))
+                        Ok(FsEntryType::Directory)
                     } else {
                         Err(TreeError::InvalidMetadata(path.to_path_buf()))
                     }
@@ -191,26 +177,28 @@ impl FsNode {
         }
     }
 
-    pub(crate) fn empty() -> Self {
+    pub(crate) fn empty(maps_physically: bool) -> Self {
         Self {
             name: String::default(),
             local_path: PathBuf::default(),
             root_path: PathBuf::default(),
-            entry_type: FsEntryType::Directory(0)
+            entry_type: FsEntryType::Directory,
+            maps_physically
         }
     }
 
-    pub fn new<A: AsRef<Path>, B: AsRef<Path>>(local_path: A, root_path: B) -> Result<Self, TreeError> {
+    pub fn new<A: AsRef<Path>, B: AsRef<Path>>(local_path: A, root_path: B, maps_physically: bool) -> Result<Self, TreeError> {
         let local_path = local_path.as_ref().to_path_buf();
         let root_path = root_path.as_ref().to_path_buf();
 
-        let entry_type = Self::validate_get_fs_entry(&root_path.join(&local_path))?;
+        let entry_type = Self::validate_get_fs_entry(&root_path.join(&local_path), maps_physically)?;
         let name = Self::get_file_name(&local_path)?;
         Ok(Self {
             name,
             local_path,
             root_path,
-            entry_type
+            entry_type,
+            maps_physically
         })
     }
 
@@ -218,7 +206,7 @@ impl FsNode {
         let new_root = new_root.as_ref();
 
         // This is not required to maintain the same entry type, so we refresh
-        let entry_type = Self::validate_get_fs_entry(&new_root.join(&self.local_path))?;
+        let entry_type = Self::validate_get_fs_entry(&new_root.join(&self.local_path), self.maps_physically)?;
         self.root_path = new_root.to_path_buf();
         self.entry_type = entry_type;
         Ok(())
@@ -228,7 +216,7 @@ impl FsNode {
         let new_local = new_local.as_ref();
 
         // This is not required to maintain the same entry type, so we refresh
-        let entry_type = Self::validate_get_fs_entry(&new_local.join(&self.local_path))?;
+        let entry_type = Self::validate_get_fs_entry(&new_local.join(&self.local_path), self.maps_physically)?;
         let name = Self::get_file_name(new_local)?;
         self.local_path = new_local.to_path_buf();
         self.entry_type = entry_type;
@@ -240,8 +228,21 @@ impl FsNode {
     }
 }
 
-#[repr(transparent)]
-pub struct FsTree(Node<FsNode>);
+pub struct FsTree{
+    config: FsTreeConfig,
+    top: Node<FsNode>
+}
+
+pub struct FsTreeConfig {
+    pub requires_physical: bool
+}
+
+impl FsTreeConfig {
+    pub fn complete(self) -> FsTree {
+        let top = Node::new(FsNode::empty(self.requires_physical));
+        FsTree { config: self, top: top }
+    }
+}
 
 impl FsTree {
     pub fn add_path<P: AsRef<Path>, R: AsRef<Path>>(&mut self, root_path: P, local_path: R) -> Result<(), TreeError> {
@@ -250,7 +251,7 @@ impl FsTree {
         let mut components = local_path.components();
         let mut current_path = PathBuf::new();
 
-        let mut current_node = Some(&mut self.0);
+        let mut current_node = Some(&mut self.top);
         while let Some(node) = current_node.take() {
             if let Some(next) = components.next() {
                 if node.data.entry_type.is_file() {
@@ -258,14 +259,29 @@ impl FsTree {
                 }
                 let next = next.as_os_str();
                 current_path = current_path.join(next);
-                current_node = Some(node.try_add_child(FsNode::new(&current_path, root_path)?, false));
+                current_node = Some(node.try_add_child(FsNode::new(&current_path, root_path, self.config.requires_physical)?, false));
             }
         }
 
         Ok(())
     }
 
-    pub fn new() -> Self {
-        Self(Node::new(FsNode::empty()))
+    pub fn walk_paths(&self, mut f: impl FnMut(&FsNode)) {
+        fn internal(node: &Node<FsNode>, f: &mut impl FnMut(&FsNode)) {
+            for (_, child) in node.children() {
+                f(&child.data);
+                if child.data.entry_type.is_dir() {
+                    internal(child, f);
+                }
+            }
+        }
+
+        internal(&self.top, &mut f);
+    }
+
+    pub fn new() -> FsTreeConfig {
+        FsTreeConfig { 
+            requires_physical: false,
+        }
     }
 }
