@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::collections::HashMap;
 use std::borrow::Borrow;
@@ -97,13 +98,36 @@ impl<T: TreeNode> Hash for RawNode<T> where <T as TreeNode>::TreeKey: Hash {
     }
 }
 
-pub struct Tree<L: FileLoader> {
-    loader: L,
-    root: RawNode<Node>
+struct RawTreeNode {
+    raw: Node,
+    entry_type: FileEntryType
 }
 
-impl<L: FileLoader> Tree<L> {
-    fn get_path(&self, path: &Path) -> Option<&RawNode<Node>> {
+impl RawTreeNode {
+    pub fn new(raw: Node, entry_type: FileEntryType) -> Self {
+        Self {
+            raw,
+            entry_type
+        }
+    }
+}
+
+impl TreeNode for RawTreeNode {
+    type ErrorType = <Node as TreeNode>::ErrorType;
+    type TreeKey = <Node as TreeNode>::TreeKey;
+
+    fn get_key(&self) -> Self::TreeKey {
+        self.raw.get_key()
+    }
+}
+
+pub struct Tree<L: FileLoader> {
+    loader: L,
+    root: RawNode<RawTreeNode>
+}
+
+impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
+    fn get_path(&self, path: &Path) -> Option<&RawNode<RawTreeNode>> {
         let mut keys = path
             .components()
             .map(|x| x.as_os_str().to_str().expect("Unable to get str from OsStr").to_string())
@@ -124,7 +148,7 @@ impl<L: FileLoader> Tree<L> {
         current_node
     }
 
-    fn get_path_mut(&mut self, path: &Path) -> Option<&mut RawNode<Node>> {
+    fn get_path_mut(&mut self, path: &Path) -> Option<&mut RawNode<RawTreeNode>> {
         let mut keys = path
             .components()
             .map(|x| x.as_os_str().to_str().expect("Unable to get str from OsStr").to_string())
@@ -145,12 +169,19 @@ impl<L: FileLoader> Tree<L> {
         current_node
     }
 
+    pub fn new(loader: L) -> Self {
+        Self {
+            root: RawNode::new(RawTreeNode::new(Node::root(), FileEntryType::Directory)),
+            loader
+        }
+    }
+
     /// Attempts to load the specified local path with the loader. If the path is not contained inside of the tree, then `Ok(None)` is returned.
     /// The loader is responsible for returning valid data. If it can't load valid data, it is expected to return an `Err(L::ErrorType)`
     pub fn load<P: AsRef<Path>>(&self, path: P) -> Result<Option<Vec<u8>>, L::ErrorType> {
         let path = path.as_ref();
         if let Some(node) = self.get_path(path) {
-            Ok(Some(self.loader.load_path(&node.data.root_path, &node.data.local_path)?))
+            Ok(Some(self.loader.load_path(&node.data.raw.root_path, &node.data.raw.local_path)?))
         } else {
             Ok(None)
         }
@@ -161,38 +192,69 @@ impl<L: FileLoader> Tree<L> {
         self.get_path(path.as_ref()).is_some()
     }
 
-    /// Inserts a path into the file tree. If a previous entry existed, it gets replaced and the root/local path is returned.
-    pub fn insert_path<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, root_path: P, local_path: Q) -> Option<(PathBuf, PathBuf)> {
-        let root_path = root_path.as_ref();
-        let local_path = local_path.as_ref();
-        let node = Node::new(root_path, local_path).unwrap();
+    fn insert_path_unchecked(&mut self, root_path: &Path, local_path: &Path, entry_type: FileEntryType) -> Option<(PathBuf, PathBuf)> {
         let parent_node = if let Some(parent_path) = local_path.parent() {
-            if let Some(parent) = self.get_path_mut(parent_path) {
+            if parent_path == Path::new("/") || parent_path == Path::new("") {
+                &mut self.root
+            } else if let Some(parent) = self.get_path_mut(parent_path) {
                 parent
             } else {
-                assert!(self.insert_path("", parent_path).is_none());
-                self.get_path_mut(parent_path).expect("Failed to find parent node immediately after adding it!")
+                assert!(self.insert_path_unchecked(&Path::new(""), parent_path, FileEntryType::Directory).is_none());
+                match self.get_path_mut(parent_path) {
+                    Some(node) => node,
+                    None => panic!("Failed to find parent node '{}' immediately after adding it", parent_path.display())
+                }
             }
         } else {
             &mut self.root 
         };
-        
-        if let Some(Node { local_path: local, root_path: root, .. }) = parent_node.add_child(node, true) {
+
+        let node = match entry_type {
+            FileEntryType::Directory => Node::new(Path::new(""), local_path).unwrap(),
+            FileEntryType::File => Node::new(root_path, local_path).unwrap()
+        };
+
+        if let Some(RawTreeNode{ raw: Node { local_path: local, root_path: root, .. }, .. }) = parent_node.add_child(RawTreeNode::new(node, entry_type), true) {
             Some((root, local))
         } else {
             None
         }
     }
 
+    /// Inserts a file into the file tree.
+    /// This operation is unchecked, and the loader does not confirm that this file exists when adding it to the file tree.
+    pub fn insert_file<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, root_path: P, local_path: Q) -> Option<(PathBuf, PathBuf)> {
+        self.insert_path_unchecked(root_path.as_ref(), local_path.as_ref(), FileEntryType::File)
+    }
+
+    /// Inserts a directory into the file tree.
+    /// This operation is unchecked, and the loader does not confirm that this file exists when adding it to the file tree.
+    pub fn insert_directory<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, root_path: P, local_path: Q) -> Option<(PathBuf, PathBuf)> {
+        self.insert_path_unchecked(root_path.as_ref(), local_path.as_ref(), FileEntryType::Directory)
+    }
+
+    /// Inserts a path into the file tree. If a previous entry existed, it gets replaced and the root/local path is returned.
+    /// If you use `insert_path`, it is required that the path "exists" such that the `FileLoader` can get it's entry type
+    pub fn insert_path<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, root_path: P, local_path: Q) -> Option<(PathBuf, PathBuf)> {
+        let root_path = root_path.as_ref();
+        let local_path = local_path.as_ref();
+        let entry_type = self.loader.get_path_type(root_path, local_path).unwrap();
+        self.insert_path_unchecked(root_path, local_path, entry_type)
+    }
+
     pub fn remove_path<P: AsRef<Path>>(&mut self, path: P) -> Option<(PathBuf, PathBuf)> {
         let path = path.as_ref();
+        println!("{}", path.display());
         let name = path
-            .as_os_str()
+            .file_name()
+            .expect("Path does not contain file name!")
             .to_str()
             .expect("Unable to convert OsStr to str")
             .to_string();
         let parent_node = if let Some(parent_path) = path.parent() {
-            if let Some(parent) = self.get_path_mut(parent_path) {
+            if parent_path == Path::new("/") || parent_path == Path::new("") {
+                &mut self.root
+            } else if let Some(parent) = self.get_path_mut(parent_path) {
                 parent
             } else {
                 return None;
@@ -201,7 +263,7 @@ impl<L: FileLoader> Tree<L> {
             &mut self.root
         };
 
-        if let Some(RawNode { data: Node { name: _, local_path: local, root_path: root }, .. }) = parent_node.children.remove(&name) {
+        if let Some(RawNode { data: RawTreeNode { raw: Node { local_path: local, root_path: root, .. }, .. }, .. }) = parent_node.children.remove(&name) {
             Some((root, local))
         } else {
             None
@@ -211,11 +273,9 @@ impl<L: FileLoader> Tree<L> {
     pub fn remove_paths_by_root<P: AsRef<Path>>(&mut self, root: P) -> Vec<(PathBuf, PathBuf)> {
         let remove = root.as_ref();
         let mut to_remove = Vec::new();
-        self.walk_paths(|node| {
-            if let Ok(FileEntryType::File) = self.loader.get_path_type(&node.root_path, &node.local_path) {
-                if node.root_path == remove {
-                    to_remove.push(node.local_path.clone());
-                }
+        self.walk_paths(|node, _| {
+            if node.root_path == remove {
+                to_remove.push(node.local_path.clone());
             }
         });
         to_remove
@@ -230,28 +290,32 @@ impl<L: FileLoader> Tree<L> {
             .collect()
     }
 
-    pub fn walk_paths<F: FnMut(&Node)>(&self, mut f: F) {
-        fn internal<F: FnMut(&Node)>(node: &RawNode<Node>, f: &mut F) {
-            f(&node.data);
+    pub fn walk_paths<F: FnMut(&Node, FileEntryType)>(&self, mut f: F) {
+        fn internal<F: FnMut(&Node, FileEntryType)>(node: &RawNode<RawTreeNode>, f: &mut F, depth: usize) {
+            if depth != 0 {
+                f(&node.data.raw, node.data.entry_type);
+            }
             for (_, child) in node.children() {
-                internal(child, f);
+                internal(child, f, depth + 1);
             }
         }
-        internal(&self.root, &mut f);
+        internal(&self.root, &mut f, 0);
     }
 
-    pub fn filter_walk_paths<C, F: FnMut(&Node) -> Option<C>>(&mut self, mut f: F) -> Vec<(PathBuf, PathBuf, C)> {
-        fn internal<C, F: FnMut(&Node) -> Option<C>>(node: &mut RawNode<Node>, f: &mut F, rejected: &mut Vec<(PathBuf, C)>) {
-            if let Some(complaint) = f(&node.data) {
-                rejected.push((node.data.local_path.clone(), complaint));
-            } else {
-                for (_, child) in node.children_mut() {
-                    internal(child, f, rejected);
+    pub fn filter_walk_paths<C, F: FnMut(&Node, FileEntryType) -> Option<C>>(&mut self, mut f: F) -> Vec<(PathBuf, PathBuf, C)> {
+        fn internal<C, F: FnMut(&Node, FileEntryType) -> Option<C>>(node: &mut RawNode<RawTreeNode>, f: &mut F, rejected: &mut Vec<(PathBuf, C)>, depth: usize) {
+            if depth != 0 {
+                if let Some(complaint) = f(&node.data.raw, node.data.entry_type) {
+                    rejected.push((node.data.raw.local_path.clone(), complaint));
+                    return;
                 }
+            }
+            for (_, child) in node.children_mut() {
+                internal(child, f, rejected, depth + 1);
             }
         }
         let mut rejected: Vec<(PathBuf, C)> = Vec::new();
-        internal(&mut self.root, &mut f, &mut rejected);
+        internal(&mut self.root, &mut f, &mut rejected, 0);
         rejected.into_iter().filter_map(|(local_path, reason)| {
             if let Some((root, local)) = self.remove_path(&local_path) {
                 Some((root, local, reason))
@@ -263,7 +327,7 @@ impl<L: FileLoader> Tree<L> {
 
     pub fn purify(&mut self) {
         let mut to_remove = Vec::new();
-        self.walk_paths(|node| {
+        self.walk_paths(|node, _| {
             if !self.loader.path_exists(&node.root_path, &node.local_path) {
                 to_remove.push(node.local_path.clone());
             }

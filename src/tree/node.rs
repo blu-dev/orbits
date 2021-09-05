@@ -35,6 +35,14 @@ impl Node {
         }
     }
 
+    pub(crate) fn root() -> Self {
+        Self {
+            name: String::new(),
+            root_path: PathBuf::new(),
+            local_path: PathBuf::new()
+        }
+    }
+
     /// Returns a `Node` structure setup with the `root_path`, `local_path`, and key.
     /// Important to note that the local path is immutable once the struct
     /// This is because changing the local path will change the key.
