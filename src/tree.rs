@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 use std::collections::HashMap;
-use std::ops::Deref;
+use std::borrow::Borrow;
 use std::path::{Path, PathBuf};
 use std::io;
 
@@ -12,7 +12,6 @@ pub mod node;
 pub mod loader;
 
 use node::Node;
-use loader::StandardLoader;
 
 #[derive(Error, Debug)]
 pub enum TreeError {
@@ -67,12 +66,12 @@ impl<T: TreeNode> RawNode<T> where <T as TreeNode>::TreeKey: Hash + Eq + Clone{
         self.children.iter_mut()
     }
 
-    pub fn get_child<A: AsRef<T::TreeKey>>(&self, key: A) -> Option<&Self> {
-        self.children.get(key.as_ref())
+    pub fn get_child<A: Borrow<T::TreeKey>>(&self, key: A) -> Option<&Self> {
+        self.children.get(key.borrow())
     }
 
-    pub fn get_child_mut<A: AsRef<T::TreeKey>>(&mut self, key: A) -> Option<&mut Self> {
-        self.children.get_mut(key.as_ref())
+    pub fn get_child_mut<A: Borrow<T::TreeKey>>(&mut self, key: A) -> Option<&mut Self> {
+        self.children.get_mut(key.borrow())
     }
 
     pub fn add_child(&mut self, data: T, overwrite: bool) -> Option<T> {
@@ -80,7 +79,7 @@ impl<T: TreeNode> RawNode<T> where <T as TreeNode>::TreeKey: Hash + Eq + Clone{
         // TODO: Change from nightly once rust allows try insert
         if self.children.contains_key(&key) {
             if overwrite {
-                let Self { data: data, .. } = self.children.insert(key, Self::new(data)).expect("No original member found despite promise!");
+                let Self { data, .. } = self.children.insert(key, Self::new(data)).expect("No original member found despite promise!");
                 Some(data)
             } else {
                 None
@@ -105,31 +104,28 @@ pub struct Tree<L: FileLoader> {
 
 impl<L: FileLoader> Tree<L> {
     fn get_path(&self, path: &Path) -> Option<&RawNode<Node>> {
-        let keys = path
+        let mut keys = path
             .components()
             .map(|x| x.as_os_str().to_str().expect("Unable to get str from OsStr").to_string())
             .collect::<Vec<String>>()
             .into_iter();
 
         let mut current_node = Some(&self.root);
-        
-        while let Some(node) = current_node.take() {
-            if let Some(next_key) = keys.next() {
-                for (key, node) in node.children() {
-                    if next_key == key.as_str() {
-                        current_node = Some(node);
-                        break;
-                    }
+
+        while let Some(next_key) = keys.next() {
+            if let Some(node) = current_node.take() {
+                if let Some(next_node) = node.get_child(&next_key) {
+                    current_node = Some(next_node);
                 }
             } else {
-                return Some(node);
+                return None;
             }
         }
-        None
+        current_node
     }
 
     fn get_path_mut(&mut self, path: &Path) -> Option<&mut RawNode<Node>> {
-        let keys = path
+        let mut keys = path
             .components()
             .map(|x| x.as_os_str().to_str().expect("Unable to get str from OsStr").to_string())
             .collect::<Vec<String>>()
@@ -137,19 +133,16 @@ impl<L: FileLoader> Tree<L> {
 
         let mut current_node = Some(&mut self.root);
 
-        while let Some(node) = current_node.take() {
-            if let Some(next_key) = keys.next() {
-                for (key, node) in node.children_mut() {
-                    if next_key == key.as_str() {
-                        current_node = Some(node);
-                        break;
-                    }
+        while let Some(next_key) = keys.next() {
+            if let Some(node) = current_node.take() {
+                if let Some(next_node) = node.get_child_mut(&next_key) {
+                    current_node = Some(next_node);
                 }
             } else {
-                return Some(node);
+                return None;
             }
         }
-        None
+        current_node
     }
 
     /// Attempts to load the specified local path with the loader. If the path is not contained inside of the tree, then `Ok(None)` is returned.
@@ -217,24 +210,54 @@ impl<L: FileLoader> Tree<L> {
 
     pub fn remove_paths_by_root<P: AsRef<Path>>(&mut self, root: P) -> Vec<(PathBuf, PathBuf)> {
         let remove = root.as_ref();
-        self.filter_walk_paths(|node| {
+        let mut to_remove = Vec::new();
+        self.walk_paths(|node| {
             if let Ok(FileEntryType::File) = self.loader.get_path_type(&node.root_path, &node.local_path) {
                 if node.root_path == remove {
-                    return Some(());
-                } 
+                    to_remove.push(node.local_path.clone());
+                }
             }
-            None
-        })
-        .into_iter()
-        .map(|(root, local, _) | (root, local))
-        .collect()
+        });
+        to_remove
+            .into_iter()
+            .filter_map(|local_path| {
+                if let Some((root, local)) = self.remove_path(&local_path) {
+                    Some((root, local))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
-    pub fn walk_paths<F: FnMut(&Node)>(&self, mut func: F) {
-
+    pub fn walk_paths<F: FnMut(&Node)>(&self, mut f: F) {
+        fn internal<F: FnMut(&Node)>(node: &RawNode<Node>, f: &mut F) {
+            f(&node.data);
+            for (_, child) in node.children() {
+                internal(child, f);
+            }
+        }
+        internal(&self.root, &mut f);
     }
 
-    pub fn filter_walk_paths<C, F: FnMut(&Node) -> Option<C>>(&mut self, mut func: F) -> Vec<(PathBuf, PathBuf, C)> {
-
+    pub fn filter_walk_paths<C, F: FnMut(&Node) -> Option<C>>(&mut self, mut f: F) -> Vec<(PathBuf, PathBuf, C)> {
+        fn internal<C, F: FnMut(&Node) -> Option<C>>(node: &mut RawNode<Node>, f: &mut F, rejected: &mut Vec<(PathBuf, C)>) {
+            if let Some(complaint) = f(&node.data) {
+                rejected.push((node.data.local_path.clone(), complaint));
+            } else {
+                for (_, child) in node.children_mut() {
+                    internal(child, f, rejected);
+                }
+            }
+        }
+        let mut rejected: Vec<(PathBuf, C)> = Vec::new();
+        internal(&mut self.root, &mut f, &mut rejected);
+        rejected.into_iter().filter_map(|(local_path, reason)| {
+            if let Some((root, local)) = self.remove_path(&local_path) {
+                Some((root, local, reason))
+            } else {
+                None
+            }
+        }).collect()
     }
 }

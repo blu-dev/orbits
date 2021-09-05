@@ -4,10 +4,10 @@ use super::{TreeError, TreeNode};
 
 /// The `Node` structure is used to represent a singular path in the filesystem
 /// This structure is not responsible for determining if a path is a file or a directory
-pub(crate) struct Node {
-    pub name: String,
-    pub local_path: PathBuf,
-    pub root_path: PathBuf
+pub struct Node {
+    pub(crate) name: String,
+    pub(crate) local_path: PathBuf,
+    pub(crate) root_path: PathBuf
 }
 
 impl TreeNode for Node {
@@ -56,5 +56,10 @@ impl Node {
 
         self.root_path = new_root.to_path_buf();
         Ok(())
+    }
+
+    /// Returns the full path of the Node
+    pub fn full_path(&self) -> PathBuf {
+        self.root_path.join(&self.local_path)
     }
 }
