@@ -260,4 +260,16 @@ impl<L: FileLoader> Tree<L> {
             }
         }).collect()
     }
+
+    pub fn purify(&mut self) {
+        let mut to_remove = Vec::new();
+        self.walk_paths(|node| {
+            if !self.loader.path_exists(&node.root_path, &node.local_path) {
+                to_remove.push(node.local_path.clone());
+            }
+        });
+        for local_path in to_remove.into_iter() {
+            let _ = self.remove_path(&local_path);
+        }
+    }
 }
