@@ -6,7 +6,7 @@ use std::io;
 
 use thiserror::Error;
 
-use crate::loader::FileLoader;
+use crate::{FileEntryType, loader::FileLoader};
 
 pub mod node;
 pub mod loader;
@@ -75,31 +75,19 @@ impl<T: TreeNode> RawNode<T> where <T as TreeNode>::TreeKey: Hash + Eq + Clone{
         self.children.get_mut(key.as_ref())
     }
 
-    pub fn try_add_child(&mut self, data: T, overwrite: bool) -> &mut Self {
-        let key = data.get_key();
-        if !self.children.contains_key(&key) | overwrite {
-            if let Some(original) = self.children.insert(key.clone(), Self::new(data)) {
-                let Self { key: _, data: data, children: _ } = original;
-            }
-            let data = self.children.get(&key).expect("Failed to find child immediately after adding it!");
-            let data = &data.data;
-        }
-        self.children.get_mut(&key).expect("Failed to find child after guaranteeing existence!")
-    }
-
-    pub fn add_child(&mut self, data: T, overwrite: bool) -> Result<bool, T::ErrorType> {
+    pub fn add_child(&mut self, data: T, overwrite: bool) -> Option<T> {
         let key = data.get_key();
         // TODO: Change from nightly once rust allows try insert
         if self.children.contains_key(&key) {
             if overwrite {
-                let Self { key: _, data: data, children: _ } = self.children.insert(key, Self::new(data)).expect("No original member found despite promise!");
+                let Self { data: data, .. } = self.children.insert(key, Self::new(data)).expect("No original member found despite promise!");
+                Some(data)
+            } else {
+                None
             }
-            Ok(overwrite)
         } else {
             self.children.insert(key.clone(), Self::new(data));
-            let data = self.children.get(&key).expect("Failed to find child immediately after adding it!");
-            let data = &data.data;
-            Ok(true)
+            None
         }
     }
 } 
@@ -110,27 +98,13 @@ impl<T: TreeNode> Hash for RawNode<T> where <T as TreeNode>::TreeKey: Hash {
     }
 }
 
-pub enum TreeFailure<T> {
-    MissingNode(T)
-}
-
-impl<T> Deref for TreeFailure<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::MissingNode(e) => e
-        }
-    }
-}
-
 pub struct Tree<L: FileLoader> {
     loader: L,
     root: RawNode<Node>
 }
 
 impl<L: FileLoader> Tree<L> {
-    fn get_path(&self, path: &Path) -> Option<&Node> {
+    fn get_path(&self, path: &Path) -> Option<&RawNode<Node>> {
         let keys = path
             .components()
             .map(|x| x.as_os_str().to_str().expect("Unable to get str from OsStr").to_string())
@@ -148,13 +122,13 @@ impl<L: FileLoader> Tree<L> {
                     }
                 }
             } else {
-                return Some(&node.data);
+                return Some(node);
             }
         }
         None
     }
 
-    fn get_path_mut(&mut self, path: &Path) -> Option<&mut Node> {
+    fn get_path_mut(&mut self, path: &Path) -> Option<&mut RawNode<Node>> {
         let keys = path
             .components()
             .map(|x| x.as_os_str().to_str().expect("Unable to get str from OsStr").to_string())
@@ -172,7 +146,7 @@ impl<L: FileLoader> Tree<L> {
                     }
                 }
             } else {
-                return Some(&mut node.data);
+                return Some(node);
             }
         }
         None
@@ -183,7 +157,7 @@ impl<L: FileLoader> Tree<L> {
     pub fn load<P: AsRef<Path>>(&self, path: P) -> Result<Option<Vec<u8>>, L::ErrorType> {
         let path = path.as_ref();
         if let Some(node) = self.get_path(path) {
-            Ok(Some(self.loader.load_path(&node.root_path, &node.local_path)?))
+            Ok(Some(self.loader.load_path(&node.data.root_path, &node.data.local_path)?))
         } else {
             Ok(None)
         }
@@ -194,23 +168,73 @@ impl<L: FileLoader> Tree<L> {
         self.get_path(path.as_ref()).is_some()
     }
 
-    pub fn insert_path<P: AsRef<Path>>(&mut self, path: P) -> Option<PathBuf> {
-
+    /// Inserts a path into the file tree. If a previous entry existed, it gets replaced and the root/local path is returned.
+    pub fn insert_path<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, root_path: P, local_path: Q) -> Option<(PathBuf, PathBuf)> {
+        let root_path = root_path.as_ref();
+        let local_path = local_path.as_ref();
+        let node = Node::new(root_path, local_path).unwrap();
+        let parent_node = if let Some(parent_path) = local_path.parent() {
+            if let Some(parent) = self.get_path_mut(parent_path) {
+                parent
+            } else {
+                assert!(self.insert_path("", parent_path).is_none());
+                self.get_path_mut(parent_path).expect("Failed to find parent node immediately after adding it!")
+            }
+        } else {
+            &mut self.root 
+        };
+        
+        if let Some(Node { local_path: local, root_path: root, .. }) = parent_node.add_child(node, true) {
+            Some((root, local))
+        } else {
+            None
+        }
     }
 
-    pub fn remove_path<P: AsRef<Path>>(&mut self, path: P) -> Option<PathBuf> {
+    pub fn remove_path<P: AsRef<Path>>(&mut self, path: P) -> Option<(PathBuf, PathBuf)> {
+        let path = path.as_ref();
+        let name = path
+            .as_os_str()
+            .to_str()
+            .expect("Unable to convert OsStr to str")
+            .to_string();
+        let parent_node = if let Some(parent_path) = path.parent() {
+            if let Some(parent) = self.get_path_mut(parent_path) {
+                parent
+            } else {
+                return None;
+            }
+        } else {
+            &mut self.root
+        };
 
+        if let Some(RawNode { data: Node { name: _, local_path: local, root_path: root }, .. }) = parent_node.children.remove(&name) {
+            Some((root, local))
+        } else {
+            None
+        }
     }
 
-    pub fn remove_paths_by_root<P: AsRef<Path>>(&mut self, root: P) -> Vec<PathBuf> {
-
+    pub fn remove_paths_by_root<P: AsRef<Path>>(&mut self, root: P) -> Vec<(PathBuf, PathBuf)> {
+        let remove = root.as_ref();
+        self.filter_walk_paths(|node| {
+            if let Ok(FileEntryType::File) = self.loader.get_path_type(&node.root_path, &node.local_path) {
+                if node.root_path == remove {
+                    return Some(());
+                } 
+            }
+            None
+        })
+        .into_iter()
+        .map(|(root, local, _) | (root, local))
+        .collect()
     }
 
     pub fn walk_paths<F: FnMut(&Node)>(&self, mut func: F) {
 
     }
 
-    pub fn filter_walk_paths<C, F: FnMut(&Node) -> Option<C>>(&mut self, mut func: F) {
+    pub fn filter_walk_paths<C, F: FnMut(&Node) -> Option<C>>(&mut self, mut func: F) -> Vec<(PathBuf, PathBuf, C)> {
 
     }
 }
