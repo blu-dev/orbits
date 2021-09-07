@@ -270,7 +270,7 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
         }
     }
 
-    pub fn remove_paths_by_root<P: AsRef<Path>>(&mut self, root: P) -> Vec<(PathBuf, PathBuf)> {
+    pub fn remove_paths_by_root<P: AsRef<Path>>(&mut self, root: P) -> Vec<PathBuf> {
         let remove = root.as_ref();
         let mut to_remove = Vec::new();
         self.walk_paths(|node, _| {
@@ -282,7 +282,7 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
             .into_iter()
             .filter_map(|local_path| {
                 if let Some((root, local)) = self.remove_path(&local_path) {
-                    Some((root, local))
+                    Some(local)
                 } else {
                     None
                 }
@@ -334,6 +334,14 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
         });
         for local_path in to_remove.into_iter() {
             let _ = self.remove_path(&local_path);
+        }
+    }
+
+    pub fn get_root_for_path<P: AsRef<Path>>(&self, path: P) -> Option<PathBuf> {
+        if let Some(node) = self.get_path(path.as_ref()) {
+            Some(node.data.raw.root_path.clone())
+        } else {
+            None
         }
     }
 }
