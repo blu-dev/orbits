@@ -6,12 +6,15 @@ use crate::{FileEntryType, ConflictHandler};
 use crate::loader::FileLoader;
 use crate::tree::{Tree, node::Node, loader::StandardLoader};
 
-use walkdir::WalkDir;
+use jwalk::{Parallelism, WalkDir};
 
 pub struct DiscoverSystem<A: FileLoader> {
     pub tree: Tree<A>,
     pub no_root: HashSet<PathBuf>,
-    pub handler: ConflictHandler
+    pub handler: ConflictHandler,
+    pub ignore: HashSet<PathBuf>,
+    pub collect: HashSet<PathBuf>,
+    pub collected: Vec<(PathBuf, PathBuf)>
 }
 
 pub enum ConflictKind {
@@ -61,9 +64,20 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
         let mut conflicts = Vec::new();
         for entry in WalkDir::new(root)
             .min_depth(1)
+            .parallelism(Parallelism::RayonNewPool(6))
             .into_iter() {
             if let Ok(entry) = entry {
-                let local_path = entry.path().strip_prefix(root).expect("Path found in root is not physically in root! Possible symlink?");
+                let path = entry.path();
+                let local_path = path.strip_prefix(root).expect("Path found in root is not physically in root! Possible symlink?");
+                let local_pathbuf = local_path.to_path_buf();
+                if self.ignore.contains(&local_pathbuf) {
+                    continue;
+                }
+                if self.collect.contains(&local_pathbuf) {
+                    self.collected.push((root.to_path_buf(), local_pathbuf));
+                    continue;
+                }
+                drop(local_pathbuf);
                 if entry.file_type().is_dir() {
                     if !self.tree.contains_path(local_path) {
                         self.tree.insert_directory(root, local_path);
@@ -99,12 +113,12 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
         for entry in WalkDir::new(path)
             .min_depth(depth)
             .max_depth(depth)
-            .into_iter()
-            .filter_entry(|e| {
-                filter(e.path())
-            }) {
+            .parallelism(Parallelism::Serial)
+            .into_iter() {
             if let Ok(entry) = entry {
-                conflicts.append(&mut self.discover_in_root(entry.path()));
+                if !entry.path().starts_with(".") {
+                    conflicts.append(&mut self.discover_in_root(entry.path()));
+                }
             }
         }
         conflicts
@@ -113,6 +127,14 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
     pub fn into_tree(self) -> Tree<A> {
         let Self { tree, .. } = self;
         tree
+    }
+
+    pub fn ignore<P: AsRef<Path>>(&mut self, local_path: P) {
+        self.ignore.insert(local_path.as_ref().to_path_buf());
+    }
+
+    pub fn collect<P: AsRef<Path>>(&mut self, local_path: P) {
+        self.collect.insert(local_path.as_ref().to_path_buf());
     }
 }
 
