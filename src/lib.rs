@@ -2,6 +2,10 @@ pub mod tree;
 pub mod loader;
 pub mod orbit;
 
+pub use orbit::{DiscoverSystem, Orbit, ConflictKind};
+pub use tree::loader::StandardLoader;
+pub use loader::FileLoader;
+
 #[derive(Copy, Clone)]
 pub enum FileEntryType {
     Directory,
@@ -151,7 +155,7 @@ mod tests {
     fn orbit_test() {
         let mut discovery = orbit::DiscoverSystem::new(StandardLoader {}, ConflictHandler::NoRoot);
         assert!(discovery.discover_in_root("/mnt/c/Users/coe_a/Downloads").len() == 0);
-        discovery.tree.walk_paths(|n, ty| {
+        discovery.tree.walk_paths(|n, _| {
             println!("{}", n.full_path().display());
         });
         panic!();

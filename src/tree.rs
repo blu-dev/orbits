@@ -281,7 +281,7 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
         to_remove
             .into_iter()
             .filter_map(|local_path| {
-                if let Some((root, local)) = self.remove_path(&local_path) {
+                if let Some((_, local)) = self.remove_path(&local_path) {
                     Some(local)
                 } else {
                     None

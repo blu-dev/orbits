@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use crate::{FileEntryType, ConflictHandler};
 use crate::loader::FileLoader;
-use crate::tree::{Tree, node::Node, loader::StandardLoader};
+use crate::tree::{Tree, node::Node};
 
 use jwalk::{Parallelism, WalkDir};
 
@@ -35,7 +35,7 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
             ConflictHandler::NoRoot => {
                 let removed_files = self.tree.remove_paths_by_root(local_path);
                 if let Some(root) = self.tree.get_root_for_path(local_path) {
-                    Some(ConflictKind::RootConflict(removed_files, root_path.join(local_path)))
+                    Some(ConflictKind::RootConflict(removed_files, root.join(local_path)))
                 } else {
                     Some(ConflictKind::RootConflict(removed_files, local_path.to_path_buf()))
                 }
@@ -55,7 +55,10 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
         Self {
             tree: Tree::new(loader),
             no_root: HashSet::new(),
-            handler
+            handler,
+            ignore: HashSet::new(),
+            collect: HashSet::new(),
+            collected: Vec::new()
         }
     }
 
@@ -64,7 +67,7 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
         let mut conflicts = Vec::new();
         for entry in WalkDir::new(root)
             .min_depth(1)
-            .parallelism(Parallelism::RayonNewPool(6))
+            .parallelism(Parallelism::Serial)
             .into_iter() {
             if let Ok(entry) = entry {
                 let path = entry.path();
@@ -113,11 +116,12 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
         for entry in WalkDir::new(path)
             .min_depth(depth)
             .max_depth(depth)
-            .parallelism(Parallelism::Serial)
+            .parallelism(Parallelism::RayonNewPool(6))
             .into_iter() {
             if let Ok(entry) = entry {
-                if !entry.path().starts_with(".") {
-                    conflicts.append(&mut self.discover_in_root(entry.path()));
+                let path = entry.path();
+                if filter(&path) {
+                    conflicts.append(&mut self.discover_in_root(path));
                 }
             }
         }
@@ -151,6 +155,13 @@ impl<P: FileLoader, V: FileLoader> LaunchPad<P, V> where
     <P as FileLoader>::ErrorType: Debug,
     <V as FileLoader>::ErrorType: Debug
 {
+    pub fn new(patch: DiscoverSystem<P>, virt: DiscoverSystem<V>) -> Self {
+        Self {
+            patch,
+            virt
+        }
+    }
+
     pub fn launch<A: FileLoader>(self, physical: A) -> Orbit<A, P, V> where <A as FileLoader>::ErrorType: Debug {
         let Self { patch, virt } = self;
         Orbit {
@@ -219,5 +230,13 @@ impl<A: FileLoader, B: FileLoader, C: FileLoader> Orbit<A, B, C> where
 
     pub fn insert_virtual_path<P: AsRef<Path>, Q: AsRef<Path>>(&mut self, root_path: P, local_path: Q) -> Option<(PathBuf, PathBuf)> {
         self.virt.insert_path(root_path, local_path)
+    }
+
+    pub fn walk_patch<F: FnMut(&Node, FileEntryType)>(&self, f: F) {
+        self.patch.walk_paths(f);
+    }
+
+    pub fn walk_virtual<F: FnMut(&Node, FileEntryType)>(&self, f: F) {
+        self.virt.walk_paths(f);
     }
 }
