@@ -12,8 +12,8 @@ pub struct DiscoverSystem<A: FileLoader> {
     pub tree: Tree<A>,
     pub no_root: HashSet<PathBuf>,
     pub handler: ConflictHandler,
-    pub ignore: HashSet<PathBuf>,
-    pub collect: HashSet<PathBuf>,
+    pub ignore: Box<dyn Fn(&Path) -> bool>,
+    pub collect: Box<dyn Fn(&Path) -> bool>,
     pub collected: Vec<(PathBuf, PathBuf)>
 }
 
@@ -21,6 +21,8 @@ pub enum ConflictKind {
     StandardConflict(PathBuf, PathBuf),
     RootConflict(Vec<PathBuf>, PathBuf)
 }
+
+fn default_conditional(_: &Path) -> bool { false }
 
 impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug {
     fn handle_conflict(&mut self, root_path: &Path, local_path: &Path) -> Option<ConflictKind> {
@@ -56,8 +58,8 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
             tree: Tree::new(loader),
             no_root: HashSet::new(),
             handler,
-            ignore: HashSet::new(),
-            collect: HashSet::new(),
+            ignore: Box::new(default_conditional),
+            collect: Box::new(default_conditional),
             collected: Vec::new()
         }
     }
@@ -73,10 +75,10 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
                 let path = entry.path();
                 let local_path = path.strip_prefix(root).expect("Path found in root is not physically in root! Possible symlink?");
                 let local_pathbuf = local_path.to_path_buf();
-                if self.ignore.contains(&local_pathbuf) {
+                if (*self.ignore)(&local_pathbuf) {
                     continue;
                 }
-                if self.collect.contains(&local_pathbuf) {
+                if (*self.collect)(&local_pathbuf) {
                     self.collected.push((root.to_path_buf(), local_pathbuf));
                     continue;
                 }
@@ -133,12 +135,12 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
         tree
     }
 
-    pub fn ignore<P: AsRef<Path>>(&mut self, local_path: P) {
-        self.ignore.insert(local_path.as_ref().to_path_buf());
+    pub fn ignoring<F: Fn(&Path) -> bool + 'static>(&mut self, ignore_fn: F) {
+        self.ignore = Box::new(ignore_fn);
     }
 
-    pub fn collect<P: AsRef<Path>>(&mut self, local_path: P) {
-        self.collect.insert(local_path.as_ref().to_path_buf());
+    pub fn collecting<F: Fn(&Path) -> bool + 'static>(&mut self, collect_fn: F) {
+        self.collect = Box::new(collect_fn);
     }
 }
 
