@@ -2,8 +2,8 @@ pub mod tree;
 pub mod loader;
 pub mod orbit;
 
-pub use orbit::{DiscoverSystem, Orbit, ConflictKind};
-pub use tree::loader::StandardLoader;
+pub use orbit::*;
+pub use tree::{Tree, loader::StandardLoader};
 pub use loader::FileLoader;
 
 #[derive(Copy, Clone)]
