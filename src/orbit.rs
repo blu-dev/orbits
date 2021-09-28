@@ -12,8 +12,8 @@ pub struct DiscoverSystem<A: FileLoader> {
     pub tree: Tree<A>,
     pub no_root: HashSet<PathBuf>,
     pub handler: ConflictHandler,
-    pub ignore: Box<dyn Fn(&Path) -> bool>,
-    pub collect: Box<dyn Fn(&Path) -> bool>,
+    pub ignore: Box<dyn Fn(&Path) -> bool + Send>,
+    pub collect: Box<dyn Fn(&Path) -> bool + Send>,
     pub collected: Vec<(PathBuf, PathBuf)>
 }
 
@@ -135,11 +135,11 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
         tree
     }
 
-    pub fn ignoring<F: Fn(&Path) -> bool + 'static>(&mut self, ignore_fn: F) {
+    pub fn ignoring<F: Fn(&Path) -> bool + Send + 'static>(&mut self, ignore_fn: F) {
         self.ignore = Box::new(ignore_fn);
     }
 
-    pub fn collecting<F: Fn(&Path) -> bool + 'static>(&mut self, collect_fn: F) {
+    pub fn collecting<F: Fn(&Path) -> bool + Send + 'static>(&mut self, collect_fn: F) {
         self.collect = Box::new(collect_fn);
     }
 }
