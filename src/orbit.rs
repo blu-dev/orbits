@@ -35,7 +35,7 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
                 }
             },
             ConflictHandler::NoRoot => {
-                let mut removed_files = self.tree.remove_paths_by_root(local_path);
+                let mut removed_files = self.tree.remove_paths_by_root(root_path);
                 removed_files.push(root_path.join(local_path));
                 if let Some(root) = self.tree.get_root_for_path(local_path) {
                     Some(ConflictKind::RootConflict(root_path.to_path_buf(), root.join(local_path)))
