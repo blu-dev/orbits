@@ -19,7 +19,7 @@ pub struct DiscoverSystem<A: FileLoader> {
 
 pub enum ConflictKind {
     StandardConflict(PathBuf, PathBuf),
-    RootConflict(Vec<PathBuf>, PathBuf)
+    RootConflict(PathBuf, PathBuf)
 }
 
 fn default_conditional(_: &Path) -> bool { false }
@@ -35,11 +35,12 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
                 }
             },
             ConflictHandler::NoRoot => {
-                let removed_files = self.tree.remove_paths_by_root(local_path);
+                let mut removed_files = self.tree.remove_paths_by_root(local_path);
+                removed_files.push(root_path.join(local_path));
                 if let Some(root) = self.tree.get_root_for_path(local_path) {
-                    Some(ConflictKind::RootConflict(removed_files, root.join(local_path)))
+                    Some(ConflictKind::RootConflict(root_path.to_path_buf(), root.join(local_path)))
                 } else {
-                    Some(ConflictKind::RootConflict(removed_files, local_path.to_path_buf()))
+                    Some(ConflictKind::RootConflict(root_path.to_path_buf(), local_path.to_path_buf()))
                 }
             },
             ConflictHandler::First =>  {
@@ -56,6 +57,17 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
     pub fn new(loader: A, handler: ConflictHandler) -> Self {
         Self {
             tree: Tree::new(loader),
+            no_root: HashSet::new(),
+            handler,
+            ignore: Box::new(default_conditional),
+            collect: Box::new(default_conditional),
+            collected: Vec::new()
+        }
+    }
+
+    pub fn from_tree(tree: Tree<A>, handler: ConflictHandler) -> Self {
+        Self {
+            tree,
             no_root: HashSet::new(),
             handler,
             ignore: Box::new(default_conditional),
@@ -91,8 +103,8 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
                     if self.tree.contains_path(local_path) {
                         if let Some(conflict) = self.handle_conflict(root, local_path) {
                             match conflict {
-                                ConflictKind::RootConflict(files, conflict_file) => {
-                                    return vec![ConflictKind::RootConflict(files, conflict_file)];
+                                ConflictKind::RootConflict(bad_root, conflict_file) => {
+                                    return vec![ConflictKind::RootConflict(bad_root, conflict_file)];
                                 },
                                 ConflictKind::StandardConflict(source, replacement) => {
                                     conflicts.push(ConflictKind::StandardConflict(source, replacement));

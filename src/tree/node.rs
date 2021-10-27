@@ -70,4 +70,12 @@ impl Node {
     pub fn full_path(&self) -> PathBuf {
         self.root_path.join(&self.local_path)
     }
+
+    pub fn get_root(&self) -> &Path {
+        self.root_path.as_path()
+    }
+
+    pub fn get_local(&self) -> &Path {
+        self.local_path.as_path()
+    }
 }
