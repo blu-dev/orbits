@@ -244,7 +244,6 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
 
     pub fn remove_path<P: AsRef<Path>>(&mut self, path: P) -> Option<(PathBuf, PathBuf)> {
         let path = path.as_ref();
-        println!("{}", path.display());
         let name = path
             .file_name()
             .expect("Path does not contain file name!")
