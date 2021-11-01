@@ -14,6 +14,19 @@ impl FileLoader for StandardLoader {
         full_path.exists()
     }
 
+    fn get_file_size(&self, root_path: &Path, local_path: &Path) -> Option<usize> {
+        let full_path = root_path.join(local_path);
+
+        if full_path.exists() {
+            match std::fs::metadata(&full_path) {
+                Ok(meta) if meta.is_file() => Some(meta.len() as usize),
+                _ => None
+            }
+        } else {
+            None
+        }
+    }
+
     fn get_path_type(&self, root_path: &Path, local_path: &Path) -> Result<FileEntryType, Self::ErrorType> {
         let full_path = root_path.join(local_path);
 

@@ -343,4 +343,16 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
             None
         }
     }
+
+    pub fn query_filesize<P: AsRef<Path>>(&self, path: P) -> Option<usize> {
+        if let Some(node) = self.get_path(path.as_ref()) {
+            self.loader.get_file_size(&node.data.raw.root_path, &node.data.raw.local_path)
+        } else {
+            None
+        }
+    }
+
+    pub fn query_filesize_local<P: AsRef<Path>>(&self, path: P) -> Option<usize> {
+        self.loader.get_file_size(&Path::new(""), path.as_ref())
+    }
 }

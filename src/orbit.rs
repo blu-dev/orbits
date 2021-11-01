@@ -253,4 +253,26 @@ impl<A: FileLoader, B: FileLoader, C: FileLoader> Orbit<A, B, C> where
     pub fn walk_virtual<F: FnMut(&Node, FileEntryType)>(&self, f: F) {
         self.virt.walk_paths(f);
     }
+
+    pub fn query_max_filesize<P: AsRef<Path>>(&self, local_path: P) -> Option<usize> {
+        let local_path = local_path.as_ref();
+        self.query_max_layered_filesize(local_path).max(self.physical.query_filesize(local_path))
+    }
+
+    pub fn query_max_layered_filesize<P: AsRef<Path>>(&self, local_path: P) -> Option<usize> {
+        let local_path = local_path.as_ref();
+        self.virt.query_filesize(local_path).max(self.patch.query_filesize(local_path))
+    }
+
+    pub fn physical_filesize<P: AsRef<Path>>(&self, local_path: P) -> Option<usize> {
+        self.physical.query_filesize_local(local_path)
+    }
+
+    pub fn patch_filesize<P: AsRef<Path>>(&self, local_path: P) -> Option<usize> {
+        self.patch.query_filesize(local_path)
+    }
+
+    pub fn virtual_filesize<P: AsRef<Path>>(&self, local_path: P) -> Option<usize> {
+        self.virt.query_filesize(local_path)
+    }
 }
