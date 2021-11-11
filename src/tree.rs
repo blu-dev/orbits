@@ -49,7 +49,7 @@ struct RawNode<T: TreeNode> {
     children: HashMap<T::TreeKey, RawNode<T>>
 }
 
-impl<T: TreeNode> RawNode<T> where <T as TreeNode>::TreeKey: Hash + Eq + Clone{
+impl<T: TreeNode> RawNode<T> where <T as TreeNode>::TreeKey: Hash + Eq + Clone {
     pub fn new(base: T) -> Self {
         let key = base.get_key();
         Self {
@@ -67,12 +67,18 @@ impl<T: TreeNode> RawNode<T> where <T as TreeNode>::TreeKey: Hash + Eq + Clone{
         self.children.iter_mut()
     }
 
-    pub fn get_child<A: Borrow<T::TreeKey>>(&self, key: A) -> Option<&Self> {
-        self.children.get(key.borrow())
+    pub fn get_child<A: ?Sized>(&self, key: &A) -> Option<&Self>
+    where
+        <T as TreeNode>::TreeKey: Borrow<A>,
+        A: Hash + Eq {
+        self.children.get(key)
     }
 
-    pub fn get_child_mut<A: Borrow<T::TreeKey>>(&mut self, key: A) -> Option<&mut Self> {
-        self.children.get_mut(key.borrow())
+    pub fn get_child_mut<A: ?Sized>(&mut self, key: &A) -> Option<&mut Self>
+    where
+        <T as TreeNode>::TreeKey: Borrow<A>,
+        A: Hash + Eq {
+        self.children.get_mut(key)
     }
 
     pub fn add_child(&mut self, data: T, overwrite: bool) -> Option<T> {
@@ -128,44 +134,38 @@ pub struct Tree<L: FileLoader> {
 
 impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
     fn get_path(&self, path: &Path) -> Option<&RawNode<RawTreeNode>> {
-        let mut keys = path
-            .components()
-            .map(|x| x.as_os_str().to_str().expect("Unable to get str from OsStr").to_string())
-            .collect::<Vec<String>>()
-            .into_iter();
-
         let mut current_node = Some(&self.root);
 
-        while let Some(next_key) = keys.next() {
+        for key in path
+            .components()
+            .map(|x| x.as_os_str().to_str().unwrap()) {
             if let Some(node) = current_node.take() {
-                if let Some(next_node) = node.get_child(&next_key) {
-                    current_node = Some(next_node);
+                if let Some(next_node) = node.get_child(key) {
+                    current_node = Some(next_node)
                 }
             } else {
                 return None;
             }
         }
+
         current_node
     }
 
     fn get_path_mut(&mut self, path: &Path) -> Option<&mut RawNode<RawTreeNode>> {
-        let mut keys = path
-            .components()
-            .map(|x| x.as_os_str().to_str().expect("Unable to get str from OsStr").to_string())
-            .collect::<Vec<String>>()
-            .into_iter();
-
         let mut current_node = Some(&mut self.root);
 
-        while let Some(next_key) = keys.next() {
+        for key in path
+            .components()
+            .map(|x| x.as_os_str().to_str().unwrap()) {
             if let Some(node) = current_node.take() {
-                if let Some(next_node) = node.get_child_mut(&next_key) {
-                    current_node = Some(next_node);
+                if let Some(next_node) = node.get_child_mut(key) {
+                    current_node = Some(next_node)
                 }
             } else {
                 return None;
             }
         }
+
         current_node
     }
 
@@ -339,6 +339,14 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
     pub fn get_root_for_path<P: AsRef<Path>>(&self, path: P) -> Option<PathBuf> {
         if let Some(node) = self.get_path(path.as_ref()) {
             Some(node.data.raw.root_path.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn get_full_path<P: AsRef<Path>>(&self, path: P) -> Option<PathBuf> {
+        if let Some(node) = self.get_path(path.as_ref()) {
+            self.loader.get_actual_path(&node.data.raw.root_path, &node.data.raw.local_path)
         } else {
             None
         }

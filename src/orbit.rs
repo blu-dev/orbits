@@ -264,6 +264,18 @@ impl<A: FileLoader, B: FileLoader, C: FileLoader> Orbit<A, B, C> where
         self.virt.query_filesize(local_path).max(self.patch.query_filesize(local_path))
     }
 
+    pub fn query_actual_path<P: AsRef<Path>>(&self, local_path: P) -> Option<PathBuf> {
+        let local_path = local_path.as_ref();
+        self.query_actual_layered_path(local_path)
+            .or(self.physical.get_full_path(local_path))
+    }
+
+    pub fn query_actual_layered_path<P: AsRef<Path>>(&self, local_path: P) -> Option<PathBuf> {
+        let local_path = local_path.as_ref();
+        self.virt.get_full_path(local_path)
+            .or(self.patch.get_full_path(local_path))
+    }
+
     pub fn physical_filesize<P: AsRef<Path>>(&self, local_path: P) -> Option<usize> {
         self.physical.query_filesize_local(local_path)
     }
