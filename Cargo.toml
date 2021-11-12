@@ -7,7 +7,7 @@ edition = "2018"
 
 [dependencies]
 thiserror = "1.0.28"
-jwalk = "0.6.0"
+walkdir = "2.3.2"
 
 [dev-dependencies]
 zip = "0.5.13"

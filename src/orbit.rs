@@ -6,7 +6,7 @@ use crate::{FileEntryType, ConflictHandler};
 use crate::loader::FileLoader;
 use crate::tree::{Tree, node::Node};
 
-use jwalk::{Parallelism, WalkDir};
+use walkdir::WalkDir;
 
 pub struct DiscoverSystem<A: FileLoader> {
     pub tree: Tree<A>,
@@ -81,7 +81,6 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
         let mut conflicts = Vec::new();
         for entry in WalkDir::new(root)
             .min_depth(1)
-            .parallelism(Parallelism::Serial)
             .into_iter() {
             if let Ok(entry) = entry {
                 let path = entry.path();
@@ -130,7 +129,6 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
         for entry in WalkDir::new(path)
             .min_depth(depth)
             .max_depth(depth)
-            .parallelism(Parallelism::RayonNewPool(6))
             .into_iter() {
             if let Ok(entry) = entry {
                 let path = entry.path();
