@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::collections::HashMap;
 use std::borrow::Borrow;
@@ -362,5 +363,14 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
 
     pub fn query_filesize_local<P: AsRef<Path>>(&self, path: P) -> Option<usize> {
         self.loader.get_file_size(&Path::new(""), path.as_ref())
+    }
+
+    pub fn get_path_type<P: AsRef<Path>>(&self, path: P) -> Result<FileEntryType, L::ErrorType> {
+        let path = path.as_ref();
+        if let Some(node) = self.get_path(path) {
+            self.loader.get_path_type(&node.data.raw.root_path, &node.data.raw.local_path)
+        } else {
+            self.loader.get_path_type(Path::new(""), path)
+        }
     }
 }

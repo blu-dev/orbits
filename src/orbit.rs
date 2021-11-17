@@ -18,7 +18,11 @@ pub struct DiscoverSystem<A: FileLoader> {
 }
 
 pub enum ConflictKind {
-    StandardConflict(PathBuf, PathBuf),
+    StandardConflict {
+        error_root: PathBuf,
+        source_root: PathBuf,
+        local: PathBuf
+    },
     RootConflict(PathBuf, PathBuf)
 }
 
@@ -45,9 +49,17 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
             },
             ConflictHandler::First =>  {
                 if let Some(root) = self.tree.get_root_for_path(local_path) {
-                    Some(ConflictKind::StandardConflict(root_path.join(local_path), root.join(local_path)))
+                    Some(ConflictKind::StandardConflict {
+                        error_root: root_path.to_path_buf(),
+                        source_root: root,
+                        local: local_path.to_path_buf()
+                    })
                 } else {
-                    Some(ConflictKind::StandardConflict(root_path.join(local_path), local_path.to_path_buf()))
+                    Some(ConflictKind::StandardConflict {
+                        error_root: root_path.to_path_buf(),
+                        source_root: PathBuf::new(),
+                        local: local_path.to_path_buf()
+                    })
                 }
             },
             ConflictHandler::Last => None
@@ -86,11 +98,11 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
                 let path = entry.path();
                 let local_path = path.strip_prefix(root).expect("Path found in root is not physically in root! Possible symlink?");
                 let local_pathbuf = local_path.to_path_buf();
-                if (*self.ignore)(&local_pathbuf) {
-                    continue;
-                }
                 if (*self.collect)(&local_pathbuf) {
                     self.collected.push((root.to_path_buf(), local_pathbuf));
+                    continue;
+                }
+                if (*self.ignore)(&local_pathbuf) {
                     continue;
                 }
                 drop(local_pathbuf);
@@ -105,12 +117,16 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
                                 ConflictKind::RootConflict(bad_root, conflict_file) => {
                                     return vec![ConflictKind::RootConflict(bad_root, conflict_file)];
                                 },
-                                ConflictKind::StandardConflict(source, replacement) => {
-                                    conflicts.push(ConflictKind::StandardConflict(source, replacement));
+                                conflict => {
+                                    conflicts.push(conflict);
                                 }
                             }
-                        } else if let Some((source, replacement)) = self.tree.insert_file(root, local_path) {
-                            conflicts.push(ConflictKind::StandardConflict(source, replacement));
+                        } else if let Some((error_root, local)) = self.tree.insert_file(root, local_path) {
+                            conflicts.push(ConflictKind::StandardConflict {
+                                error_root,
+                                source_root: root.to_path_buf(),
+                                local
+                            });
                         }
                     } else {
                         if self.tree.insert_file(root, local_path).is_some() {
@@ -284,5 +300,17 @@ impl<A: FileLoader, B: FileLoader, C: FileLoader> Orbit<A, B, C> where
 
     pub fn virtual_filesize<P: AsRef<Path>>(&self, local_path: P) -> Option<usize> {
         self.virt.query_filesize(local_path)
+    }
+
+    pub fn get_physical_entry_type<P: AsRef<Path>>(&self, local_path: P) -> Result<FileEntryType, A::ErrorType> {
+        self.physical.get_path_type(local_path)
+    }
+
+    pub fn get_patch_entry_type<P: AsRef<Path>>(&self, local_path: P) -> Result<FileEntryType, B::ErrorType> {
+        self.patch.get_path_type(local_path)
+    }
+
+    pub fn get_virtual_entry_type<P: AsRef<Path>>(&self, local_path: P) -> Result<FileEntryType, C::ErrorType> {
+        self.virt.get_path_type(local_path)
     }
 }
