@@ -1,5 +1,4 @@
 use std::fmt::Debug;
-use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::collections::HashMap;
 use std::borrow::Borrow;
@@ -129,7 +128,7 @@ impl TreeNode for RawTreeNode {
 }
 
 pub struct Tree<L: FileLoader> {
-    loader: L,
+    pub loader: L,
     root: RawNode<RawTreeNode>
 }
 
