@@ -30,13 +30,10 @@ impl FileLoader for StandardLoader {
     fn get_path_type(&self, root_path: &Path, local_path: &Path) -> Result<FileEntryType, Self::ErrorType> {
         let full_path = root_path.join(local_path);
 
-        let metadata = std::fs::metadata(&full_path)?;
-        if metadata.is_dir() {
-            Ok(FileEntryType::Directory)
-        } else if metadata.is_file() {
-            Ok(FileEntryType::File)
-        } else {
-            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Filepath '{}' has an unsupported entry type.", full_path.display())))
+        match std::fs::metadata(&full_path) {
+            Ok(m) if m.is_dir() => Ok(FileEntryType::Directory),
+            Ok(m) if m.is_file() => Ok(FileEntryType::File),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("Filepath '{}' has an unsupported entry type.", full_path.display()))),
         }
     }
 

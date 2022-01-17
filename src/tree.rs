@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::borrow::Borrow;
 use std::path::{Path, PathBuf};
 use std::io;
@@ -169,6 +169,7 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
         current_node
     }
 
+    /// Creates a new tree based off of a file loader
     pub fn new(loader: L) -> Self {
         Self {
             root: RawNode::new(RawTreeNode::new(Node::root(), FileEntryType::Directory)),
@@ -242,14 +243,15 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
         self.insert_path_unchecked(root_path, local_path, entry_type)
     }
 
+    /// Removes a path from the file tree. If the entry existed, this function returns the root path and the local path separately, else
+    /// it returns `None`
     pub fn remove_path<P: AsRef<Path>>(&mut self, path: P) -> Option<(PathBuf, PathBuf)> {
         let path = path.as_ref();
         let name = path
             .file_name()
             .expect("Path does not contain file name!")
             .to_str()
-            .expect("Unable to convert OsStr to str")
-            .to_string();
+            .expect("Unable to convert OsStr to str");
         let parent_node = if let Some(parent_path) = path.parent() {
             if parent_path == Path::new("/") || parent_path == Path::new("") {
                 &mut self.root
@@ -262,13 +264,14 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
             &mut self.root
         };
 
-        if let Some(RawNode { data: RawTreeNode { raw: Node { local_path: local, root_path: root, .. }, .. }, .. }) = parent_node.children.remove(&name) {
+        if let Some(RawNode { data: RawTreeNode { raw: Node { local_path: local, root_path: root, .. }, .. }, .. }) = parent_node.children.remove(name) {
             Some((root, local))
         } else {
             None
         }
     }
 
+    /// Removes all paths from the file tree who's root path is the same as the specified path. This returns a vector of all local paths that were removed
     pub fn remove_paths_by_root<P: AsRef<Path>>(&mut self, root: P) -> Vec<PathBuf> {
         let remove = root.as_ref();
         let mut to_remove = Vec::new();
@@ -289,6 +292,7 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
             .collect()
     }
 
+    /// Recursively walk through the file tree.
     pub fn walk_paths<F: FnMut(&Node, FileEntryType)>(&self, mut f: F) {
         fn internal<F: FnMut(&Node, FileEntryType)>(node: &RawNode<RawTreeNode>, f: &mut F, depth: usize) {
             if depth != 0 {
@@ -301,6 +305,7 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
         internal(&self.root, &mut f, 0);
     }
 
+    /// Recursively walk through the file tree and declare which entries to keep.
     pub fn filter_walk_paths<C, F: FnMut(&Node, FileEntryType) -> Option<C>>(&mut self, mut f: F) -> Vec<(PathBuf, PathBuf, C)> {
         fn internal<C, F: FnMut(&Node, FileEntryType) -> Option<C>>(node: &mut RawNode<RawTreeNode>, f: &mut F, rejected: &mut Vec<(PathBuf, C)>, depth: usize) {
             if depth != 0 {
@@ -324,6 +329,7 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
         }).collect()
     }
 
+    /// Recursively go through the file tree and remove all paths that don't actually exist according to the file loader
     pub fn purify(&mut self) {
         let mut to_remove = Vec::new();
         self.walk_paths(|node, _| {
@@ -336,6 +342,7 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
         }
     }
 
+    /// Get the root path for a specified local path
     pub fn get_root_for_path<P: AsRef<Path>>(&self, path: P) -> Option<PathBuf> {
         if let Some(node) = self.get_path(path.as_ref()) {
             Some(node.data.raw.root_path.clone())
@@ -344,6 +351,7 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
         }
     }
 
+    /// Get the full path for a specified local path
     pub fn get_full_path<P: AsRef<Path>>(&self, path: P) -> Option<PathBuf> {
         if let Some(node) = self.get_path(path.as_ref()) {
             self.loader.get_actual_path(&node.data.raw.root_path, &node.data.raw.local_path)
@@ -352,6 +360,7 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
         }
     }
 
+    /// Get the filesize for a specified local path
     pub fn query_filesize<P: AsRef<Path>>(&self, path: P) -> Option<usize> {
         if let Some(node) = self.get_path(path.as_ref()) {
             self.loader.get_file_size(&node.data.raw.root_path, &node.data.raw.local_path)
@@ -360,16 +369,43 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
         }
     }
 
+    /// Get the filesize for a specified local path (where the loader is only provided the local path)
+    /// NOTE: Intended to be used with virtual loaders
     pub fn query_filesize_local<P: AsRef<Path>>(&self, path: P) -> Option<usize> {
         self.loader.get_file_size(&Path::new(""), path.as_ref())
     }
 
+    /// Gets the path type for the provided local path
     pub fn get_path_type<P: AsRef<Path>>(&self, path: P) -> Result<FileEntryType, L::ErrorType> {
         let path = path.as_ref();
         if let Some(node) = self.get_path(path) {
+            if node.data.raw.root_path == Path::new("") {
+                return Ok(FileEntryType::Directory);
+            }
             self.loader.get_path_type(&node.data.raw.root_path, &node.data.raw.local_path)
         } else {
             self.loader.get_path_type(Path::new(""), path)
         }
+    }
+
+    /// Gets the children for the provided path in terms of the tree
+    pub fn get_children<'a, P: AsRef<Path>>(&'a self, path: P) -> HashSet<&'a Path> {
+        let mut paths = HashSet::new();
+
+        if let Some(node) = self.get_path(path.as_ref()) {
+            for path in node.children.values() {
+                paths.insert(path.data.raw.get_local());
+            }
+        }
+
+        paths
+    }
+
+    pub fn loader<'a>(&'a self) -> &'a L {
+        &self.loader
+    }
+
+    pub fn loader_mut<'a>(&'a mut self) -> &'a mut L {
+        &mut self.loader
     }
 }

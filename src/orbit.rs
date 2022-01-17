@@ -8,13 +8,12 @@ use crate::tree::{Tree, node::Node};
 
 use walkdir::WalkDir;
 
-pub struct DiscoverSystem<A: FileLoader> {
-    pub tree: Tree<A>,
-    pub no_root: HashSet<PathBuf>,
-    pub handler: ConflictHandler,
-    pub ignore: Box<dyn Fn(&Path) -> bool + Send>,
-    pub collect: Box<dyn Fn(&Path) -> bool + Send>,
-    pub collected: Vec<(PathBuf, PathBuf)>
+pub struct LaunchPad<A: FileLoader> {
+    tree: Tree<A>,
+    handler: ConflictHandler,
+    ignore: Box<dyn Fn(&Path) -> bool + Send>,
+    collect: Box<dyn Fn(&Path) -> bool + Send>,
+    collected: Vec<(PathBuf, PathBuf)>
 }
 
 pub enum ConflictKind {
@@ -28,7 +27,7 @@ pub enum ConflictKind {
 
 fn default_conditional(_: &Path) -> bool { false }
 
-impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug {
+impl<A: FileLoader> LaunchPad<A> where <A as FileLoader>::ErrorType: Debug {
     fn handle_conflict(&mut self, root_path: &Path, local_path: &Path) -> Option<ConflictKind> {
         match self.handler {
             ConflictHandler::Strict => {
@@ -69,7 +68,6 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
     pub fn new(loader: A, handler: ConflictHandler) -> Self {
         Self {
             tree: Tree::new(loader),
-            no_root: HashSet::new(),
             handler,
             ignore: Box::new(default_conditional),
             collect: Box::new(default_conditional),
@@ -80,7 +78,6 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
     pub fn from_tree(tree: Tree<A>, handler: ConflictHandler) -> Self {
         Self {
             tree,
-            no_root: HashSet::new(),
             handler,
             ignore: Box::new(default_conditional),
             collect: Box::new(default_conditional),
@@ -168,34 +165,24 @@ impl<A: FileLoader> DiscoverSystem<A> where <A as FileLoader>::ErrorType: Debug 
     pub fn collecting<F: Fn(&Path) -> bool + Send + 'static>(&mut self, collect_fn: F) {
         self.collect = Box::new(collect_fn);
     }
-}
 
-/// LaunchPad<P, V> does not need any information about the physical loader.
-/// This is setup in such a way that the patch and virtual sections can be configured and initialized
-/// without the need for the physical loader to be prepared, since sometimes it can be faster to initialize things
-/// in multiple threads, and a physical loader is inteded to be used with an archive
-pub struct LaunchPad<P: FileLoader, V: FileLoader> {
-    pub patch: DiscoverSystem<P>,
-    pub virt: DiscoverSystem<V>
-}
-
-impl<P: FileLoader, V: FileLoader> LaunchPad<P, V> where
-    <P as FileLoader>::ErrorType: Debug,
-    <V as FileLoader>::ErrorType: Debug
-{
-    pub fn new(patch: DiscoverSystem<P>, virt: DiscoverSystem<V>) -> Self {
-        Self {
-            patch,
-            virt
-        }
+    pub fn collected_paths<'a>(&'a self) -> &'a Vec<(PathBuf, PathBuf)> {
+        &self.collected
     }
 
-    pub fn launch<A: FileLoader>(self, physical: A) -> Orbit<A, P, V> where <A as FileLoader>::ErrorType: Debug {
-        let Self { patch, virt } = self;
+    pub fn tree<'a>(&'a self) -> &'a Tree<A> {
+        &self.tree
+    }
+
+    pub fn launch<P: FileLoader, V: FileLoader>(self, physical: P, virt: Tree<V>) -> Orbit<P, A, V>
+    where
+        <P as FileLoader>::ErrorType: Debug,
+        <V as FileLoader>::ErrorType: Debug
+    {
         Orbit {
             physical: Tree::new(physical),
-            patch: patch.into_tree(),
-            virt: virt.into_tree()
+            patch: self.into_tree(),
+            virt
         }
     }
 }
@@ -312,5 +299,31 @@ impl<A: FileLoader, B: FileLoader, C: FileLoader> Orbit<A, B, C> where
 
     pub fn get_virtual_entry_type<P: AsRef<Path>>(&self, local_path: P) -> Result<FileEntryType, C::ErrorType> {
         self.virt.get_path_type(local_path)
+    }
+
+    pub fn get_children<'a, P: AsRef<Path>>(&'a self, local_path: P) -> HashSet<&'a Path> {
+        let local_path = local_path.as_ref();
+        let virt = self.virt.get_children(local_path);
+        let mut patch = self.patch.get_children(local_path);
+        patch.extend(virt.into_iter());
+        patch
+    }
+
+    pub fn contains<P: AsRef<Path>>(&self, local_path: P) -> bool {
+        let local_path = local_path.as_ref();
+
+        self.virt.contains_path(local_path) || self.patch.contains_path(local_path)
+    }
+
+    pub fn patch<'a>(&'a self) -> &'a Tree<B> {
+        &self.patch
+    }
+
+    pub fn virt<'a>(&'a self) -> &'a Tree<C> {
+        &self.virt
+    }
+
+    pub fn virt_mut<'a>(&'a mut self) -> &'a mut Tree<C> {
+        &mut self.virt
     }
 }
