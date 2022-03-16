@@ -182,9 +182,14 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
     pub fn load<P: AsRef<Path>>(&self, path: P) -> Result<Option<Vec<u8>>, L::ErrorType> {
         let path = path.as_ref();
         if let Some(node) = self.get_path(path) {
+            println!("get_path success");
             Ok(Some(self.loader.load_path(&node.data.raw.root_path, &node.data.raw.local_path)?))
         } else {
-            Ok(None)
+            //println!("get_path none: {}", path.display());
+            match self.loader.load_path(&path, Path::new("")) {
+                Ok(data) => Ok(Some(data)),
+                Err(_) => Ok(None),
+            }
         }
     }
 

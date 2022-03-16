@@ -209,7 +209,7 @@ impl<A: FileLoader, B: FileLoader, C: FileLoader> Orbit<A, B, C> where
 {
     pub fn load<P: AsRef<Path>>(&self, path: P) -> Result<Vec<u8>, Error<A::ErrorType, B::ErrorType, C::ErrorType>> {
         let path = path.as_ref();
-        match self.virt.load(path) {
+        match dbg!(self.virt.load(path)) {
             Ok(Some(data)) => return Ok(data),
             Ok(_) => {},
             Err(e) => return Err(Error::Virtual(e))
@@ -219,7 +219,7 @@ impl<A: FileLoader, B: FileLoader, C: FileLoader> Orbit<A, B, C> where
 
     pub fn load_patch<P: AsRef<Path>>(&self, path: P) -> Result<Vec<u8>, Error<A::ErrorType, B::ErrorType, C::ErrorType>> {
         let path = path.as_ref();
-        match self.patch.load(path) {
+        match dbg!(self.patch.load(path)) {
             Ok(Some(data)) => return Ok(data),
             Ok(_) => {},
             Err(e) => return Err(Error::Patch(e))
