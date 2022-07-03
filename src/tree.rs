@@ -185,7 +185,7 @@ impl<L: FileLoader> Tree<L> where <L as FileLoader>::ErrorType: Debug {
             Ok(Some(self.loader.load_path(&node.data.raw.root_path, &node.data.raw.local_path)?))
         } else {
             //println!("get_path none: {}", path.display());
-            match self.loader.load_path(&path, Path::new("")) {
+            match self.loader.load_path(Path::new(""), path) {
                 Ok(data) => Ok(Some(data)),
                 Err(_) => Ok(None),
             }
